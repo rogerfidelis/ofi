@@ -3,7 +3,7 @@
 -- Seed: empresas
 -- ============================================================
 
-INSERT INTO core.empresas (nome)
+INSERT INTO core.empresas (nome_empresa)
 VALUES
     ('CBO'),
     ('BRAM'),
