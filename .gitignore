@@ -1,0 +1,17 @@
+# Credenciais e variáveis de ambiente
+.env
+.env.*
+
+# Python
+__pycache__/
+*.pyc
+
+# Ambientes virtuais
+.venv/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# VS Code local
+.vscode/
