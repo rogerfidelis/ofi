@@ -1,4 +1,4 @@
-from datetime import date, datetime, time
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -17,30 +17,26 @@ ARQUIVO_ORIGEM = (
     BASE
     / "dados"
     / "SURVEY_VESSELS"
-    / "SURVEY_VESSELS_20260803_manha.xlsx"
+    / "SURVEY_VESSELS_20260913_noite.xlsx"
 )
 
-# Cabeçalho no arquivo de origem -> cabeçalho no arquivo destino
+# Coluna do arquivo de origem -> coluna do arquivo de destino
 MAPEAMENTO_COLUNAS = {
     "data": "data_consulta",
-    "hora": "hora_consulta",
-    "latitude": "latitude",
-    "longitude": "longitude",
+    "lat": "lat_a",
+    "lon": "lon_a",
     "data reportada": "data_reportada",
-    "hora reportada": "hora_reportada",
     "status": "status",
 }
 
-# Colunas que determinam se um registro já existe.
-# O status não participa porque pode sofrer pequenas variações
-# sem que isso represente uma nova posição AIS.
+# Todas as colunas gravadas participam da identificação
+# de duplicidade.
 CHAVE_DUPLICIDADE = [
     "data_consulta",
-    "hora_consulta",
-    "latitude",
-    "longitude",
+    "lat_a",
+    "lon_a",
     "data_reportada",
-    "hora_reportada",
+    "status",
 ]
 
 
@@ -48,22 +44,49 @@ CHAVE_DUPLICIDADE = [
 # NORMALIZAÇÃO
 # ============================================================
 
+def valor_vazio(valor):
+    """Verifica valores vazios com segurança."""
+    if valor is None:
+        return True
+
+    try:
+        return bool(pd.isna(valor))
+    except (TypeError, ValueError):
+        return False
+
+
 def normalizar_texto(valor):
-    if valor is None or pd.isna(valor):
+    if valor_vazio(valor):
+        return None
+
+    texto = str(valor).strip()
+
+    if not texto:
+        return None
+
+    return texto.upper()
+
+
+def normalizar_cabecalho(valor):
+    if valor_vazio(valor):
         return ""
 
     return str(valor).strip().lower()
 
 
 def normalizar_nome_aba(valor):
-    if valor is None or pd.isna(valor):
+    if valor_vazio(valor):
         return ""
 
     return str(valor).strip().upper()
 
 
 def normalizar_data(valor):
-    if valor is None or pd.isna(valor):
+    """
+    Converte datas de diferentes formatos para YYYY-MM-DD.
+    Isso permite comparar datas do pandas com datas do Excel.
+    """
+    if valor_vazio(valor):
         return None
 
     if isinstance(valor, pd.Timestamp):
@@ -82,74 +105,41 @@ def normalizar_data(valor):
     )
 
     if pd.isna(convertido):
-        return normalizar_texto(valor)
+        return str(valor).strip()
 
     return convertido.date().isoformat()
 
 
-def normalizar_hora(valor):
-    if valor is None or pd.isna(valor):
-        return None
-
-    if isinstance(valor, pd.Timestamp):
-        return valor.strftime("%H:%M:%S")
-
-    if isinstance(valor, datetime):
-        return valor.strftime("%H:%M:%S")
-
-    if isinstance(valor, time):
-        return valor.strftime("%H:%M:%S")
-
-    # Excel pode armazenar horas como fração de um dia.
-    if isinstance(valor, (int, float)):
-        segundos = round(float(valor) * 24 * 60 * 60)
-        segundos = segundos % (24 * 60 * 60)
-
-        horas = segundos // 3600
-        minutos = (segundos % 3600) // 60
-        segundos = segundos % 60
-
-        return f"{horas:02d}:{minutos:02d}:{segundos:02d}"
-
-    texto = str(valor).strip()
-
-    convertido = pd.to_datetime(
-        texto,
-        errors="coerce",
-    )
-
-    if not pd.isna(convertido):
-        return convertido.strftime("%H:%M:%S")
-
-    return texto
-
-
 def normalizar_coordenada(valor):
-    if valor is None or pd.isna(valor):
+    """
+    Arredonda a coordenada para seis casas decimais,
+    evitando diferenças causadas apenas por formatação.
+    """
+    if valor_vazio(valor):
         return None
 
     try:
-        # Seis casas decimais representam aproximadamente 11 cm.
         return round(float(valor), 6)
     except (TypeError, ValueError):
-        return normalizar_texto(valor)
+        return str(valor).strip()
 
 
 def normalizar_valor_chave(nome_coluna, valor):
     if nome_coluna in {"data_consulta", "data_reportada"}:
         return normalizar_data(valor)
 
-    if nome_coluna in {"hora_consulta", "hora_reportada"}:
-        return normalizar_hora(valor)
-
-    if nome_coluna in {"latitude", "longitude"}:
+    if nome_coluna in {"lat_a", "lon_a"}:
         return normalizar_coordenada(valor)
 
-    return normalizar_texto(valor)
+    if nome_coluna == "status":
+        return normalizar_texto(valor)
+
+    return valor
 
 
 def converter_valor_excel(valor):
-    if valor is None or pd.isna(valor):
+    """Converte valores do pandas para formatos aceitos pelo Excel."""
+    if valor_vazio(valor):
         return None
 
     if isinstance(valor, pd.Timestamp):
@@ -163,13 +153,25 @@ def converter_valor_excel(valor):
 # ============================================================
 
 def obter_cabecalhos_dataframe(dataframe):
+    """
+    Exemplo de resultado:
+    {
+        "embarcacao": "Embarcacao",
+        "data": "Data",
+        "lat": "Lat"
+    }
+    """
     return {
-        normalizar_texto(coluna): coluna
+        normalizar_cabecalho(coluna): coluna
         for coluna in dataframe.columns
     }
 
 
 def obter_cabecalhos_planilha(ws):
+    """
+    Retorna:
+    cabeçalho normalizado -> número da coluna no Excel.
+    """
     cabecalhos = {}
 
     for numero_coluna in range(1, ws.max_column + 1):
@@ -178,24 +180,30 @@ def obter_cabecalhos_planilha(ws):
             column=numero_coluna,
         ).value
 
-        if valor is not None:
-            cabecalhos[normalizar_texto(valor)] = numero_coluna
+        nome = normalizar_cabecalho(valor)
+
+        if nome:
+            cabecalhos[nome] = numero_coluna
 
     return cabecalhos
 
 
 # ============================================================
-# CHAVE DE DUPLICIDADE
+# DUPLICIDADE
 # ============================================================
 
 def criar_chave_registro(registro):
     """
-    Recebe um dicionário no formato:
-    {
-        "data_consulta": valor,
-        "hora_consulta": valor,
-        ...
-    }
+    Cria uma chave comparável com os cinco campos gravados.
+
+    Exemplo:
+    (
+        "2026-08-03",
+        -22.912345,
+        -43.123456,
+        "2026-08-03",
+        "UNDERWAY"
+    )
     """
     return tuple(
         normalizar_valor_chave(
@@ -208,10 +216,9 @@ def criar_chave_registro(registro):
 
 def carregar_chaves_existentes(ws, cabecalhos_destino):
     """
-    Lê os registros já existentes na aba e monta um conjunto
-    de chaves para pesquisa rápida.
+    Lê os registros existentes na aba da embarcação.
     """
-    chaves = set()
+    chaves_existentes = set()
 
     for numero_linha in range(2, ws.max_row + 1):
         registro = {
@@ -224,15 +231,15 @@ def carregar_chaves_existentes(ws, cabecalhos_destino):
 
         chave = criar_chave_registro(registro)
 
-        # Evita considerar linhas totalmente vazias.
+        # Não considera linhas completamente vazias.
         if any(valor is not None for valor in chave):
-            chaves.add(chave)
+            chaves_existentes.add(chave)
 
-    return chaves
+    return chaves_existentes
 
 
 # ============================================================
-# PROCESSAMENTO
+# PROCESSAMENTO POR EMPRESA
 # ============================================================
 
 def processar_empresa(empresa):
@@ -263,71 +270,87 @@ def processar_empresa(empresa):
     )
 
     if origem.empty:
-        print("A planilha de origem está vazia.")
+        print(f"A aba '{empresa}' está vazia.")
         return
 
     cabecalhos_origem = obter_cabecalhos_dataframe(origem)
 
-    colunas_ausentes = [
-        coluna
-        for coluna in MAPEAMENTO_COLUNAS
-        if coluna not in cabecalhos_origem
-    ]
+    colunas_origem_obrigatorias = {
+        "embarcacao",
+        "data",
+        "lat",
+        "lon",
+        "data reportada",
+        "status",
+    }
 
-    if colunas_ausentes:
+    colunas_origem_ausentes = (
+        colunas_origem_obrigatorias
+        - set(cabecalhos_origem)
+    )
+
+    if colunas_origem_ausentes:
         raise ValueError(
             "Colunas ausentes no arquivo de origem: "
-            + ", ".join(colunas_ausentes)
+            + ", ".join(sorted(colunas_origem_ausentes))
         )
 
     wb = load_workbook(arquivo_destino)
 
-    # Guarda os dados de cada aba para não precisar reler
-    # todas as linhas para cada registro.
+    # Evita reler uma aba toda vez que a embarcação aparece.
     cache_abas = {}
 
     inseridos = 0
     duplicados = 0
+    invalidos = 0
     abas_nao_encontradas = set()
-    abas_invalidas = set()
+    abas_com_erro = set()
+
+    coluna_embarcacao = cabecalhos_origem["embarcacao"]
 
     for indice, linha in origem.iterrows():
         numero_linha_origem = indice + 2
 
-        # A primeira coluna deve conter o nome da embarcação.
-        aba_destino = normalizar_nome_aba(linha.iloc[0])
+        aba_destino = normalizar_nome_aba(
+            linha[coluna_embarcacao]
+        )
 
         if not aba_destino:
+            invalidos += 1
+
             print(
                 f"Linha {numero_linha_origem}: "
-                "nome da embarcação vazio."
+                "embarcação não informada."
             )
+
             continue
 
         if aba_destino not in wb.sheetnames:
             abas_nao_encontradas.add(aba_destino)
+
             print(
                 f"Linha {numero_linha_origem}: "
                 f"aba '{aba_destino}' não encontrada."
             )
+
             continue
 
-        # Prepara a aba apenas na primeira vez que ela aparece.
+        # Prepara e armazena as informações da aba.
         if aba_destino not in cache_abas:
             ws = wb[aba_destino]
             cabecalhos_destino = obter_cabecalhos_planilha(ws)
 
-            colunas_destino_necessarias = set(
+            colunas_destino_obrigatorias = set(
                 MAPEAMENTO_COLUNAS.values()
             )
 
             colunas_destino_ausentes = (
-                colunas_destino_necessarias
+                colunas_destino_obrigatorias
                 - set(cabecalhos_destino)
             )
 
             if colunas_destino_ausentes:
-                abas_invalidas.add(aba_destino)
+                abas_com_erro.add(aba_destino)
 
                 print(
                     f"Aba '{aba_destino}' sem os cabeçalhos: "
@@ -338,18 +361,16 @@ def processar_empresa(empresa):
 
                 continue
 
-            chaves_existentes = carregar_chaves_existentes(
-                ws,
-                cabecalhos_destino,
-            )
-
             cache_abas[aba_destino] = {
                 "ws": ws,
                 "cabecalhos": cabecalhos_destino,
-                "chaves": chaves_existentes,
+                "chaves": carregar_chaves_existentes(
+                    ws,
+                    cabecalhos_destino,
+                ),
             }
 
-        if aba_destino in abas_invalidas:
+        if aba_destino in abas_com_erro:
             continue
 
         dados_aba = cache_abas[aba_destino]
@@ -358,7 +379,7 @@ def processar_empresa(empresa):
         cabecalhos_destino = dados_aba["cabecalhos"]
         chaves_existentes = dados_aba["chaves"]
 
-        # Monta o registro usando os nomes das colunas de destino.
+        # Monta o registro usando os nomes do arquivo destino.
         registro = {}
 
         for coluna_origem, coluna_destino in MAPEAMENTO_COLUNAS.items():
@@ -367,42 +388,57 @@ def processar_empresa(empresa):
 
         chave = criar_chave_registro(registro)
 
+        # Evita inserir uma linha sem informações.
+        if all(valor is None for valor in chave):
+            invalidos += 1
+
+            print(
+                f"Linha {numero_linha_origem}: "
+                "registro vazio — ignorado."
+            )
+
+            continue
+
         if chave in chaves_existentes:
             duplicados += 1
 
             print(
                 f"Linha {numero_linha_origem}: "
-                f"registro duplicado de '{aba_destino}' — ignorado."
+                f"registro de '{aba_destino}' já existe — ignorado."
             )
 
             continue
 
-        linha_destino = ws.max_row + 1
+        linha_destino = ws.max_row + 1 #ADICIONAR DADO NA LINHA ABAIXO
 
         for nome_coluna, valor in registro.items():
+            numero_coluna = cabecalhos_destino[nome_coluna]
+
             ws.cell(
                 row=linha_destino,
-                column=cabecalhos_destino[nome_coluna],
+                column=numero_coluna,
                 value=converter_valor_excel(valor),
             )
 
-        # Impede duplicação nas próximas linhas da mesma execução.
+        # Registra imediatamente a chave para impedir duplicações
+        # encontradas posteriormente na mesma execução.
         chaves_existentes.add(chave)
 
         inseridos += 1
 
         print(
             f"Linha {numero_linha_origem}: "
-            f"'{aba_destino}' inserido na linha {linha_destino}."
+            f"'{aba_destino}' inserida na linha {linha_destino}."
         )
 
     wb.save(arquivo_destino)
     wb.close()
 
     print()
-    print(f"Arquivo atualizado: {arquivo_destino}")
-    print(f"Novos registros inseridos: {inseridos}")
-    print(f"Registros duplicados ignorados: {duplicados}")
+    print(f"Arquivo: {arquivo_destino.name}")
+    print(f"Novos registros: {inseridos}")
+    print(f"Duplicados ignorados: {duplicados}")
+    print(f"Registros inválidos: {invalidos}")
     print(f"Abas não encontradas: {len(abas_nao_encontradas)}")
 
     if abas_nao_encontradas:
@@ -412,6 +448,10 @@ def processar_empresa(empresa):
         )
 
 
+# ============================================================
+# EXECUÇÃO
+# ============================================================
+
 def main():
     inicio = datetime.now()
     empresas_com_erro = []
@@ -419,22 +459,27 @@ def main():
     print("=" * 70)
     print("COMBINADOR DE DADOS — SURVEY VESSELS")
     print("=" * 70)
-    print(f"Origem: {ARQUIVO_ORIGEM}")
+    print(f"Arquivo de origem: {ARQUIVO_ORIGEM}")
 
     for empresa in EMPRESAS:
         try:
             processar_empresa(empresa)
+
         except Exception as erro:
             empresas_com_erro.append(empresa.upper())
-            print(f"Erro ao processar {empresa.upper()}: {erro}")
 
-    fim = datetime.now()
+            print()
+            print(
+                f"Erro ao processar {empresa.upper()}: {erro}"
+            )
+
+    duracao = datetime.now() - inicio
 
     print()
     print("=" * 70)
     print("PROCESSAMENTO FINALIZADO")
     print("=" * 70)
-    print(f"Novas posições gravadas em {fim - inicio}.")
+    print(f"Duração: {duracao}")
 
     if empresas_com_erro:
         print(
