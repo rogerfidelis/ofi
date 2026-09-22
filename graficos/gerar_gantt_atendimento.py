@@ -32,8 +32,8 @@ load_dotenv(BASE / ".env")
 
 EMPRESAS = ["BRAM", "CBO", "STARNAV"]
 
-DATA_INICIO = "2026-07-16"
-DATA_FIM = "2026-09-13"
+DATA_INICIO = "2026-08-01"
+DATA_FIM = "2026-09-22"
 
 PASTA_SAIDA = BASE / "graficos" / "gantt_atendimento"
 
@@ -114,7 +114,7 @@ def criar_engine():
     senha_url = quote(senha, safe="")
 
     url = (
-        f"postgresql+psycopg2://"
+        f"postgresql+psycopg://"
         f"{usuario_url}:{senha_url}"
         f"@{host}:{port}/{banco}"
         f"?sslmode={sslmode}"

@@ -18,7 +18,7 @@ BASE = Path(__file__).resolve().parents[1]
 ARQUIVO = BASE / "dados" / "SURVEY_POSICOES.xlsx"
 ABA_EXCEL = "posicoes"
 
-TIPOS_EXCLUIDOS = {"porto", "estaleiro"}
+TIPOS_EXCLUIDOS = {"porto", "estaleiro","fundeio"}
 
 # A coluna do banco é TIMESTAMP sem fuso.
 # Convenção: armazenar todas as consultas em UTC.
@@ -174,7 +174,7 @@ if not senha:
     )
 
 url = URL.create(
-    drivername="postgresql+psycopg2",
+    drivername="postgresql+psycopg",
     username=os.getenv("OFI_DB_USER", "postgres"),
     password=senha,
     host=os.getenv("OFI_DB_HOST", "localhost"),

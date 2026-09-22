@@ -1,11 +1,12 @@
 from pathlib import Path
 import os
+from uuid import uuid4
 
 import pandas as pd
 import geopandas as gpd
 
 from shapely.geometry import Polygon, MultiPolygon
-from sqlalchemy import create_engine, text, URL
+from sqlalchemy import create_engine, text, URL, BigInteger, Date
 from dotenv import load_dotenv
 
 
@@ -65,7 +66,7 @@ if faltantes:
 # ============================================================
 
 url = URL.create(
-    drivername="postgresql+psycopg2",
+    drivername="postgresql+psycopg",
     username=DB_USER,
     password=DB_PASSWORD,
     host=DB_HOST,
@@ -433,40 +434,89 @@ if not existe:
 # CARGA
 # ============================================================
 
-print()
-print("Validação de id_origem:")
-print(gdf["id_origem"].head())
-print("dtype:", gdf["id_origem"].dtype)
-print("tipo primeiro valor:", type(gdf["id_origem"].iloc[0]))
-print()
-print("Iniciando carga em core.campos...")
+# codigo_campo é a chave de correspondência com o shapefile.
+# Os IDs internos e os campos controlados pelo OFI são preservados.
+if gdf.empty:
+    raise ValueError("Nenhum campo válido para importar. Carga cancelada.")
 
-
-# Estratégia atual:
-# reconstrução completa dos dados da tabela.
-#
-# A estrutura da tabela NÃO é apagada.
-# Apenas os registros existentes são removidos.
-
-with engine.begin() as conn:
-
-    conn.execute(
-        text(
-            """
-            TRUNCATE TABLE core.campos
-            RESTART IDENTITY;
-            """
-        )
+duplicados = gdf.loc[
+    gdf["codigo_campo"].duplicated(keep=False), "codigo_campo"
+].unique().tolist()
+if duplicados:
+    raise ValueError(
+        f"codigo_campo duplicado no shapefile: {duplicados}. "
+        "Resolva as duplicidades antes da carga."
     )
 
+colunas_atualizar = [
+    c for c in colunas_destino
+    if c not in {"codigo_campo", "operadora_id", "ativo"}
+]
+# Identificadores SQL gerados exclusivamente a partir de constantes locais.
+staging = "_carga_campos_" + uuid4().hex
+staging_sql = f'core."{staging}"'
+atribuicoes = ", ".join(f'"{c}" = s."{c}"' for c in colunas_atualizar)
+colunas_sql = ", ".join(f'"{c}"' for c in colunas_destino)
+valores_sql = ", ".join(f's."{c}"' for c in colunas_destino)
 
-gdf.to_postgis(
-    name="campos",
-    con=engine,
-    schema="core",
-    if_exists="append",
-    index=False,
-)
+print()
+print("Atualizando campos existentes e inserindo novos...")
+
+# Toda a carga usa a mesma conexão e transação. Qualquer falha desfaz
+# as alterações, inclusive a criação da tabela intermediária.
+with engine.begin() as conn:
+    # Serializa escritas na tabela durante a correspondência e a carga.
+    conn.execute(text("LOCK TABLE core.campos IN SHARE ROW EXCLUSIVE MODE"))
+
+    duplicados_banco = conn.execute(text("""
+        SELECT codigo_campo
+        FROM core.campos
+        WHERE codigo_campo IS NOT NULL
+        GROUP BY codigo_campo
+        HAVING COUNT(*) > 1
+    """)).scalars().all()
+    if duplicados_banco:
+        raise ValueError(
+            f"codigo_campo duplicado em core.campos: {duplicados_banco}. "
+            "Carga cancelada para evitar correspondências ambíguas."
+        )
+
+    gdf.to_postgis(
+        name=staging,
+        con=conn,
+        schema="core",
+        if_exists="fail",
+        index=False,
+        # Tipos explícitos evitam inferência como TEXT em colunas só com NULL.
+        dtype={
+            "operadora_id": BigInteger(),
+            "id_origem": BigInteger(),
+            **{coluna: Date() for coluna in colunas_data},
+        },
+    )
+
+    atualizados = conn.execute(text(f"""
+        UPDATE core.campos AS c
+        SET {atribuicoes}
+        FROM {staging_sql} AS s
+        WHERE c.codigo_campo = s.codigo_campo
+    """)).rowcount
+
+    inseridos = conn.execute(text(f"""
+        INSERT INTO core.campos ({colunas_sql})
+        SELECT {valores_sql}
+        FROM {staging_sql} AS s
+        WHERE NOT EXISTS (
+            SELECT 1 FROM core.campos AS c
+            WHERE c.codigo_campo = s.codigo_campo
+        )
+    """)).rowcount
+
+    conn.execute(text(f"DROP TABLE {staging_sql}"))
+
+print(f"Campos existentes atualizados: {atualizados}")
+print(f"Novos campos inseridos: {inseridos}")
+print("Campos ausentes do shapefile foram mantidos no banco.")
 
 
 # ============================================================

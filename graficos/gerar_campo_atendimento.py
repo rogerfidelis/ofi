@@ -26,8 +26,8 @@ BRANCO = "#FFFFFF"
 # PERÍODO DA ANÁLISE
 # ============================================================
 
-DATA_INICIO = "2026-07-16"
-DATA_FIM = "2026-09-13"
+DATA_INICIO = "2026-08-01"
+DATA_FIM = "2026-09-22"
 
 data_inicio = pd.to_datetime(DATA_INICIO)
 
@@ -45,7 +45,7 @@ data_fim = (
 
 engine = create_engine(
     (
-        f"postgresql+psycopg2://"
+        f"postgresql+psycopg://"
         f"{os.getenv('OFI_DB_USER')}:"
         f"{os.getenv('OFI_DB_PASSWORD')}@"
         f"{os.getenv('OFI_DB_HOST')}:"

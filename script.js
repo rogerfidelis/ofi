@@ -1,8 +1,8 @@
 const ESTATISTICAS = {
-    "km": 31523.27,
+    "km": 17213.35,
     "empresas": 3,
     "psvs": 53,
-    "campos": 23
+    "campos": 21
 };
 
 document.getElementById("km").dataset.target = ESTATISTICAS.km;

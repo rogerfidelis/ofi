@@ -37,8 +37,8 @@ EMPRESAS = [
     "starnav",
 ]
 
-DATA_INICIO = pd.Timestamp("2026-07-16 00:00:00")
-DATA_FIM = pd.Timestamp("2026-09-13 23:59:59")
+DATA_INICIO = pd.Timestamp("2026-08-01 00:00:00")
+DATA_FIM = pd.Timestamp("2026-09-22 23:59:59")
 
 CENTRO_MAPA = [-22.872174, -41.983981]
 ZOOM_INICIAL = 9
@@ -81,7 +81,7 @@ if not DATABASE_URL:
         )
 
     DATABASE_URL = (
-        f"postgresql+psycopg2://{user}:{password}"
+        f"postgresql+psycopg://{user}:{password}"
         f"@{host}:{port}/{database}"
     )
 
