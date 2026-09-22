@@ -23,8 +23,8 @@ load_dotenv(BASE / ".env")
 
 EMPRESAS = ["bram", "starnav", "cbo"]
 
-DATA_INICIO = "2026-07-16"
-DATA_FIM = "2026-09-13"  # Inclui o dia inteiro.
+DATA_INICIO = "2026-08-01"
+DATA_FIM = "2026-09-22"  # Inclui o dia inteiro.
 
 FUNDO = "#0B1F3A"
 BRANCO = "#FFFFFF"
@@ -101,7 +101,7 @@ def criar_engine():
         )
 
     url = URL.create(
-        drivername="postgresql+psycopg2",
+        drivername="postgresql+psycopg",
         username=os.getenv("OFI_DB_USER"),
         password=os.getenv("OFI_DB_PASSWORD"),
         host=os.getenv("OFI_DB_HOST"),

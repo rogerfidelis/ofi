@@ -48,7 +48,7 @@ if ausentes:
     )
 
 DATABASE_URL = URL.create(
-    drivername="postgresql+psycopg2",
+    drivername="postgresql+psycopg",
     username=DB_USER,
     password=DB_PASSWORD,
     host=DB_HOST,
@@ -192,38 +192,37 @@ def preparar_locais_fixos() -> pd.DataFrame:
 # ============================================================
 # CARGA
 # ============================================================
-
 def carregar_locais_fixos(df: pd.DataFrame) -> None:
-    sql_insert = text(
-        """
+
+    sql_upsert = text("""
         INSERT INTO core.locais_fixos (
             nome_local,
             tipo_local,
             latitude,
             longitude
         )
-        SELECT
-            :nome,
-            :tipo_local,
-            :latitude,
-            :longitude
-        WHERE NOT EXISTS (
-            SELECT 1
-            FROM core.locais_fixos AS lf
-            WHERE UPPER(TRIM(lf.nome_local)) = UPPER(TRIM(:nome))
-              AND UPPER(TRIM(lf.tipo_local)) = UPPER(TRIM(:tipo_local))
-              AND lf.latitude = :latitude
-              AND lf.longitude = :longitude
-        );
-        """
-    )
+        VALUES (
+            CAST(:nome AS VARCHAR),
+            CAST(:tipo_local AS VARCHAR),
+            CAST(:latitude AS NUMERIC),
+            CAST(:longitude AS NUMERIC)
+        )
 
-    inseridos = 0
+        ON CONFLICT (nome_local)
+        DO UPDATE SET
+            tipo_local = EXCLUDED.tipo_local,
+            latitude = EXCLUDED.latitude,
+            longitude = EXCLUDED.longitude;
+    """)
+
+    processados = 0
 
     with engine.begin() as connection:
+
         for registro in df.to_dict(orient="records"):
-            resultado = connection.execute(
-                sql_insert,
+
+            connection.execute(
+                sql_upsert,
                 {
                     "nome": registro["nome"],
                     "tipo_local": registro["tipo_local"],
@@ -232,11 +231,11 @@ def carregar_locais_fixos(df: pd.DataFrame) -> None:
                 }
             )
 
-            inseridos += resultado.rowcount
+            processados += 1
 
-    print(f"Novos locais inseridos: {inseridos}")
-    print(f"Registros já existentes: {len(df) - inseridos}")
+    print(f"Locais processados: {processados}")
     print("Carga concluída com sucesso.")
+
 
 
 # ============================================================

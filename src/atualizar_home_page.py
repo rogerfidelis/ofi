@@ -86,7 +86,7 @@ def conectar():
     if url_texto:
         url = make_url(url_texto)
         if url.drivername in ('postgres', 'postgresql'):
-            url = url.set(drivername='postgresql+psycopg2')
+            url = url.set(drivername='postgresql+psycopg')
     else:
         def env(*nomes, default=None):
             return next((os.environ[n] for n in nomes if os.getenv(n)), default)
@@ -102,7 +102,7 @@ def conectar():
         certificado = env('OFI_DB_SSLROOTCERT', 'PGSSLROOTCERT')
         if certificado:
             query['sslrootcert'] = certificado
-        url = URL.create('postgresql+psycopg2', username=usuario,
+        url = URL.create('postgresql+psycopg', username=usuario,
             password=env('OFI_DB_PASSWORD', 'PGPASSWORD'), host=host,
             port=int(env('OFI_DB_PORT', 'PGPORT', default='5432')),
             database=banco, query=query)

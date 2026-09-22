@@ -15,3 +15,8 @@ venv/
 
 # VS Code local
 .vscode/
+
+.env
+.env.*
+!.env.example
+*.bak

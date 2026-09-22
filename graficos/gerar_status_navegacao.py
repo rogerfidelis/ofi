@@ -36,7 +36,7 @@ if not DB_PASSWORD:
 
 
 DATABASE_URL = (
-    f"postgresql+psycopg2://"
+    f"postgresql+psycopg://"
     f"{DB_USER}:{DB_PASSWORD}@"
     f"{DB_HOST}:{DB_PORT}/{DB_NAME}"
 )
@@ -52,8 +52,8 @@ engine = create_engine(
 # PERÍODO DA ANÁLISE
 # ============================================================
 
-DATA_INICIO = "2026-07-16"
-DATA_FIM = "2026-09-13"
+DATA_INICIO = "2026-08-01"
+DATA_FIM = "2026-09-22"
 
 
 DATA_INICIO = pd.to_datetime(DATA_INICIO)

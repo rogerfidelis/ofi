@@ -154,7 +154,7 @@ def criar_engine():
         )
 
     url = URL.create(
-        drivername="postgresql+psycopg2",
+        drivername="postgresql+psycopg",
         username=os.environ["OFI_DB_USER"],
         password=os.environ["OFI_DB_PASSWORD"],
         host=os.environ["OFI_DB_HOST"],

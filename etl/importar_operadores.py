@@ -63,7 +63,7 @@ if faltantes:
 # ============================================================
 
 url = URL.create(
-    drivername="postgresql+psycopg2",
+    drivername="postgresql+psycopg",
     username=DB_USER,
     password=DB_PASSWORD,
     host=DB_HOST,
