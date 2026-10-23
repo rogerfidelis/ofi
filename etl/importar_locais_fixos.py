@@ -54,7 +54,7 @@ DATABASE_URL = URL.create(
     host=DB_HOST,
     port=int(DB_PORT),
     database=DB_NAME,
-    query={"sslmode": "require"}
+    query={"sslmode": "disable"}
 )
 
 engine = create_engine(

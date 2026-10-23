@@ -22,11 +22,11 @@ TIPOS_EXCLUIDOS = {"porto", "estaleiro", "fundeio"}
 TIPOS_PERMITIDOS = {
     "navio sonda",
     "FPSO",
-    "Semi-Sub/Prod/Perfuração",
-    "Semi-Sub/Perfuração",
+    "Semi-Sub/Prod/Perfuracao",
+    "Semi-Sub/Perfuracao",
     "Fixa (Habitada)",
-    "Semi-Sub/Produção",
-    "Fixa (Rebombeio)",
+    "Semi-Sub/Producao",
+    "Fixa (Rebombeio)"
 }
 
 MAPA_TIPOS = {
@@ -204,7 +204,7 @@ url = URL.create(
     drivername="postgresql+psycopg",
     username=os.getenv("OFI_DB_USER", "postgres"),
     password=senha,
-    host=os.getenv("OFI_DB_HOST", "localhost"),
+    host=os.getenv("OFI_DB_HOST", "127.0.0.1"),
     port=int(os.getenv("OFI_DB_PORT", "5432")),
     database=os.getenv("OFI_DB_NAME", "ofi"),
 )

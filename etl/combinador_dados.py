@@ -17,7 +17,7 @@ ARQUIVO_ORIGEM = (
     BASE
     / "dados"
     / "SURVEY_VESSELS"
-    / "SURVEY_VESSELS_20260914_tarde.xlsx"
+    / "tabela 2026-10-23 114111.xlsx"
 )
 
 # Coluna do arquivo de origem -> coluna do arquivo de destino

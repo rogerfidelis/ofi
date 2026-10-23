@@ -3,13 +3,14 @@ import re
 import unicodedata
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
+
+from calculo_distancia import preparar_e_calcular_distancias
 
 
 # ============================================================
@@ -24,12 +25,9 @@ load_dotenv(BASE / ".env")
 EMPRESAS = ["bram", "starnav", "cbo"]
 
 DATA_INICIO = "2026-08-01"
-DATA_FIM = "2026-09-22"  # Inclui o dia inteiro.
 
 FUNDO = "#0B1F3A"
 BRANCO = "#FFFFFF"
-
-RAIO_TERRA_KM = 6371.0088
 
 PASTA_SAIDA = BASE / "graficos" / "distancia_acumulada"
 
@@ -155,104 +153,6 @@ def carregar_posicoes(engine, empresa, inicio, fim_exclusivo):
                 "fim_exclusivo": fim_exclusivo.to_pydatetime(),
             },
         )
-
-
-# ============================================================
-# PREPARAÇÃO DOS DADOS
-# ============================================================
-
-def preparar_posicoes(df):
-    df = df.copy()
-
-    for coluna in ["data_consulta", "data_reportada"]:
-        df[coluna] = pd.to_datetime(
-            df[coluna],
-            errors="coerce",
-        )
-
-    for coluna in ["latitude", "longitude"]:
-        df[coluna] = pd.to_numeric(
-            df[coluna],
-            errors="coerce",
-        )
-
-    validos = (
-        df["data_reportada"].notna()
-        & df["latitude"].between(-90, 90)
-        & df["longitude"].between(-180, 180)
-    )
-
-    invalidos = int((~validos).sum())
-    df = df.loc[validos].copy()
-
-    # Para um mesmo horário reportado, utiliza o registro
-    # válido da consulta mais recente.
-    # id_posicao funciona como desempate.
-    df = df.sort_values(
-        ["data_reportada", "data_consulta", "id_posicao"],
-        na_position="first",
-    )
-
-    antes = len(df)
-
-    df = df.drop_duplicates(
-        subset=["id_embarcacao", "data_reportada"],
-        keep="last",
-    )
-
-    repetidos = antes - len(df)
-
-    df = df.sort_values(
-        "data_reportada"
-    ).reset_index(drop=True)
-
-    return df, invalidos, repetidos
-
-
-# ============================================================
-# CÁLCULO DA DISTÂNCIA
-# ============================================================
-
-def calcular_distancias(df):
-    df = df.copy()
-
-    latitudes = np.radians(
-        df["latitude"].to_numpy(dtype=float)
-    )
-
-    longitudes = np.radians(
-        df["longitude"].to_numpy(dtype=float)
-    )
-
-    distancias = np.zeros(len(df), dtype=float)
-
-    if len(df) > 1:
-        delta_lat = np.diff(latitudes)
-        delta_lon = np.diff(longitudes)
-
-        a = (
-            np.sin(delta_lat / 2) ** 2
-            + np.cos(latitudes[:-1])
-            * np.cos(latitudes[1:])
-            * np.sin(delta_lon / 2) ** 2
-        )
-
-        # Proteção contra pequenas imprecisões numéricas.
-        a = np.clip(a, 0.0, 1.0)
-
-        distancias[1:] = (
-            2
-            * RAIO_TERRA_KM
-            * np.arcsin(np.sqrt(a))
-        )
-
-    df["distancia_km"] = distancias
-
-    df["distancia_acumulada_km"] = (
-        df["distancia_km"].cumsum()
-    )
-
-    return df
 
 
 # ============================================================
@@ -400,17 +300,19 @@ def gerar_grafico(df, nome_embarcacao, destino):
 
 def main():
     inicio = pd.Timestamp(DATA_INICIO).normalize()
-    fim = pd.Timestamp(DATA_FIM).normalize()
+
+    # Captura a data e a hora do computador ao iniciar a execução.
+    fim = pd.Timestamp.now()
+    fim_exclusivo = fim
 
     if fim < inicio:
         raise ValueError(
-            "DATA_FIM deve ser igual ou posterior a DATA_INICIO."
+            "DATA_INICIO não pode ser posterior ao momento da execução."
         )
-
-    fim_exclusivo = fim + pd.Timedelta(days=1)
 
     engine = criar_engine()
 
+    
     total_graficos = 0
     falhas = []
 
@@ -423,8 +325,8 @@ def main():
         print("=" * 70)
 
         print(
-            f"\nPeríodo: {inicio:%d/%m/%Y} "
-            f"a {fim:%d/%m/%Y}"
+            f"\nPeríodo: {inicio:%d/%m/%Y %H:%M:%S} "
+            f"a {fim:%d/%m/%Y %H:%M:%S}"
         )
         print("Referência temporal: data_reportada")
 
@@ -459,7 +361,7 @@ def main():
                         bruto["nome_embarcacao"].iloc[0]
                     )
 
-                    df, invalidos, repetidos = preparar_posicoes(
+                    df, invalidos, repetidos = preparar_e_calcular_distancias(
                         bruto
                     )
 
@@ -472,8 +374,6 @@ def main():
                     if df.empty:
                         print("Ignorada: nenhuma posição válida.")
                         continue
-
-                    df = calcular_distancias(df)
 
                     if len(df) == 1:
                         print(

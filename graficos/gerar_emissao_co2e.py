@@ -1,0 +1,550 @@
+import os
+import re
+import unicodedata
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+
+from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import URL
+
+from calculo_distancia import preparar_e_calcular_distancias
+
+
+# ============================================================
+# CONFIGURACAO
+# ============================================================
+
+BASE = Path(__file__).resolve().parents[1]
+load_dotenv(BASE / ".env")
+
+EMPRESAS = ["BRAM", "STARNAV", "CBO"]
+DATA_INICIO = "2026-08-01"
+
+FUNDO = "#0B1F3A"
+BRANCO = "#FFFFFF"
+PASTA_SAIDA = BASE / "graficos" / "emissao_co2e"
+
+# Regras preliminares fornecidas para o modelo OFI.
+# Taxas de consumo presumidas em m3 de combustivel por dia.
+CONSUMO_CRUZEIRO_M3_DIA = 27.0
+CONSUMO_PROXIMO_ATIVO_M3_DIA = 8.0
+CONSUMO_LOCAL_FIXO_M3_DIA = 3.0
+
+# Fator de emissao informado pelo usuario: kg CO2e por litro.
+KG_CO2E_POR_LITRO = 2.68
+LITROS_POR_M3 = 1000.0
+
+# "Proximo" usa o limite de 1 km, consistente com os limiares
+# de proximidade registrados no processamento de posicoes enriquecidas.
+LIMIAR_PROXIMIDADE_KM = 1.0
+LIMIAR_DISTANCIA_CRUZEIRO_KM = 1.0
+
+
+# ============================================================
+# CONEXAO COM O BANCO
+# ============================================================
+
+def criar_engine():
+    """Usa DATABASE_URL ou as variaveis OFI_DB_* do arquivo .env."""
+    database_url = os.getenv("DATABASE_URL")
+    sslmode = os.getenv("OFI_DB_SSLMODE")
+    connect_args = {"connect_timeout": 20}
+
+    if sslmode:
+        connect_args["sslmode"] = sslmode
+
+    if database_url:
+        if database_url.startswith("postgres://"):
+            database_url = database_url.replace(
+                "postgres://", "postgresql://", 1
+            )
+        return create_engine(
+            database_url,
+            pool_pre_ping=True,
+            connect_args=connect_args,
+        )
+
+    obrigatorias = [
+        "OFI_DB_HOST",
+        "OFI_DB_NAME",
+        "OFI_DB_USER",
+        "OFI_DB_PASSWORD",
+    ]
+    ausentes = [nome for nome in obrigatorias if not os.getenv(nome)]
+    if ausentes:
+        raise ValueError(
+            "Configure DATABASE_URL ou as variaveis ausentes no .env: "
+            + ", ".join(ausentes)
+        )
+
+    url = URL.create(
+        drivername="postgresql+psycopg",
+        username=os.getenv("OFI_DB_USER"),
+        password=os.getenv("OFI_DB_PASSWORD"),
+        host=os.getenv("OFI_DB_HOST"),
+        port=int(os.getenv("OFI_DB_PORT", "5432")),
+        database=os.getenv("OFI_DB_NAME"),
+    )
+    return create_engine(
+        url,
+        pool_pre_ping=True,
+        connect_args=connect_args,
+    )
+
+
+# ============================================================
+# CONSULTA DAS POSICOES ENRIQUECIDAS
+# ============================================================
+
+def carregar_posicoes(engine, inicio, fim_exclusivo):
+    """
+    Usa RAW como fonte da trajetória e associa contexto operacional
+    da tabela enriquecida. O período é filtrado por data_reportada.
+    """
+    sql = text("""
+        WITH raw_posicoes AS (
+            SELECT 'BRAM'::text AS empresa_origem, p.id_posicao,
+                   p.id_embarcacao, p.data_consulta, p.data_reportada,
+                   p.latitude, p.longitude
+            FROM raw.posicoes_bram AS p
+            UNION ALL
+            SELECT 'STARNAV'::text AS empresa_origem, p.id_posicao,
+                   p.id_embarcacao, p.data_consulta, p.data_reportada,
+                   p.latitude, p.longitude
+            FROM raw.posicoes_starnav AS p
+            UNION ALL
+            SELECT 'CBO'::text AS empresa_origem, p.id_posicao,
+                   p.id_embarcacao, p.data_consulta, p.data_reportada,
+                   p.latitude, p.longitude
+            FROM raw.posicoes_cbo AS p
+        )
+        SELECT
+            p.empresa_origem AS empresa,
+            p.id_embarcacao,
+            emb.nome_embarcacao,
+            p.id_posicao,
+            p.data_consulta,
+            p.data_reportada,
+            p.latitude,
+            p.longitude,
+            pe.distancia_local_km,
+            pe.distancia_ativo_km,
+            pe.contexto_operacional,
+            pe.campo
+        FROM raw_posicoes AS p
+        JOIN core.embarcacoes AS emb
+          ON emb.id_embarcacao = p.id_embarcacao
+        LEFT JOIN analytics.posicoes_enriquecidas AS pe
+          ON pe.id_embarcacao = p.id_embarcacao
+         AND pe.id_posicao_origem = p.id_posicao
+        WHERE p.data_reportada >= :inicio
+          AND p.data_reportada < :fim_exclusivo
+        ORDER BY
+            p.empresa_origem,
+            emb.nome_embarcacao,
+            p.data_reportada,
+            p.data_consulta,
+            p.id_posicao
+    """)
+
+    with engine.connect() as conexao:
+        return pd.read_sql_query(
+            sql,
+            conexao,
+            params={
+                "inicio": inicio.to_pydatetime(),
+                "fim_exclusivo": fim_exclusivo.to_pydatetime(),
+            },
+        )
+
+
+# ============================================================
+# CLASSIFICACAO DO INTERVALO E CALCULO DE EMISSOES
+# ============================================================
+
+def calcular_emissoes_embarcacao(df):
+    """
+    Cada registro representa o intervalo entre posições AIS consecutivas.
+    distancia_km é calculada pela função compartilhada a partir das
+    coordenadas RAW; o intervalo usa data_reportada.
+
+    Regras:
+      - distancia > 1 km: cruzeiro, 27 m3/dia;
+      - distancia < 1 km e posicao dentro de um campo (campo preenchido): 8 m3/dia;
+      - distancia <= 1 km e ativo proximo (<= 1 km): 8 m3/dia;
+      - distancia <= 1 km e local fixo proximo (<= 1 km): 3 m3/dia;
+      - demais intervalos: sem classificacao (emissao nao calculada).
+
+    Emissao = consumo (m3/dia) * intervalo (dias) * 1000 L/m3
+              * 2,68 kg CO2e/L.
+    """
+    df = df.copy()
+    for coluna in ["data_consulta", "data_reportada"]:
+        df[coluna] = pd.to_datetime(df[coluna], errors="coerce")
+
+    for coluna in [
+        "distancia_km",
+        "distancia_local_km",
+        "distancia_ativo_km",
+    ]:
+        df[coluna] = pd.to_numeric(df[coluna], errors="coerce")
+
+    # A ordem, a deduplicação e distancia_km já foram definidas pela
+    # função compartilhada preparar_e_calcular_distancias().
+    df = df[df["data_reportada"].notna()].copy()
+
+    df["data_posicao_anterior"] = df["data_reportada"].shift(1)
+    df["intervalo_horas"] = (
+        df["data_reportada"] - df["data_posicao_anterior"]
+    ).dt.total_seconds() / 3600.0
+    df["intervalo_dias"] = df["intervalo_horas"] / 24.0
+
+    # O primeiro registro nao possui coleta anterior no periodo.
+    intervalos_validos = df["intervalo_dias"].gt(0)
+    dist = df["distancia_km"]
+    perto_ativo = df["distancia_ativo_km"].le(LIMIAR_PROXIMIDADE_KM)
+    perto_local = df["distancia_local_km"].le(LIMIAR_PROXIMIDADE_KM)
+
+    # Se ambos estiverem a <= 1 km, usa o contexto operacional do banco.
+    contexto_ativo = (
+        df["contexto_operacional"].astype("string").str.upper()
+        == "PROXIMO_ATIVO"
+    )
+    contexto_local = df["contexto_operacional"].astype("string").str.upper().isin(
+        ["PORTO", "ESTALEIRO", "FUNDEIO"]
+    )
+
+    cond_cruzeiro = dist.gt(LIMIAR_DISTANCIA_CRUZEIRO_KM)
+
+    # Nova regra: deslocamento inferior a 1 km e posição atual dentro
+    # de um campo petrolífero identificado pela geometria no banco.
+    campo_preenchido = (
+        df["campo"].astype("string").str.strip().ne("")
+        & df["campo"].notna()
+    )
+    cond_campo = (
+        dist.lt(LIMIAR_DISTANCIA_CRUZEIRO_KM)
+        & campo_preenchido
+    )
+
+    # A regra de campo tem prioridade sobre proximidade de ativo/local.
+    cond_ativo = (
+        ~cond_campo
+        & dist.le(LIMIAR_DISTANCIA_CRUZEIRO_KM)
+        & perto_ativo
+        & (contexto_ativo | ~perto_local | (df["distancia_ativo_km"] <= df["distancia_local_km"]))
+    )
+    cond_local = (
+        ~cond_campo
+        & dist.le(LIMIAR_DISTANCIA_CRUZEIRO_KM)
+        & perto_local
+        & ~cond_ativo
+        & (contexto_local | ~perto_ativo | (df["distancia_local_km"] < df["distancia_ativo_km"]))
+    )
+
+    df["regime_operacional_estimado"] = "SEM_CLASSIFICACAO"
+    df["consumo_estimado_m3_dia"] = np.nan
+
+    df.loc[cond_cruzeiro, "regime_operacional_estimado"] = "CRUZEIRO"
+    df.loc[cond_cruzeiro, "consumo_estimado_m3_dia"] = CONSUMO_CRUZEIRO_M3_DIA
+
+    df.loc[cond_campo, "regime_operacional_estimado"] = "DENTRO_CAMPO"
+    df.loc[cond_campo, "consumo_estimado_m3_dia"] = CONSUMO_PROXIMO_ATIVO_M3_DIA
+
+    df.loc[cond_ativo, "regime_operacional_estimado"] = "PROXIMO_ATIVO"
+    df.loc[cond_ativo, "consumo_estimado_m3_dia"] = CONSUMO_PROXIMO_ATIVO_M3_DIA
+
+    df.loc[cond_local, "regime_operacional_estimado"] = "LOCAL_FIXO"
+    df.loc[cond_local, "consumo_estimado_m3_dia"] = CONSUMO_LOCAL_FIXO_M3_DIA
+
+    # Nunca calcula consumo para o primeiro registro ou intervalos invalidos.
+    df.loc[~intervalos_validos, "consumo_estimado_m3_dia"] = np.nan
+    df.loc[~intervalos_validos, "regime_operacional_estimado"] = "SEM_INTERVALO_ANTERIOR"
+
+    df["consumo_estimado_m3_intervalo"] = (
+        df["consumo_estimado_m3_dia"] * df["intervalo_dias"]
+    )
+    df["combustivel_estimado_litros"] = (
+        df["consumo_estimado_m3_intervalo"] * LITROS_POR_M3
+    )
+    df["emissao_intervalo_kg_co2e"] = (
+        df["combustivel_estimado_litros"] * KG_CO2E_POR_LITRO
+    )
+
+    # Sem classificacao = emissao desconhecida, nao zero. Para a curva
+    # acumulada, apenas intervalos classificados sao somados; o CSV
+    # preserva NaN para deixar os intervalos nao estimados evidentes.
+    df["emissao_acumulada_kg_co2e"] = (
+        df["emissao_intervalo_kg_co2e"].fillna(0).cumsum()
+    )
+    df["emissao_acumulada_t_co2e"] = (
+        df["emissao_acumulada_kg_co2e"] / 1000.0
+    )
+    return df
+
+
+# ============================================================
+# NOMES DE ARQUIVOS
+# ============================================================
+
+def nome_arquivo(nome):
+    nome = unicodedata.normalize("NFKD", str(nome))
+    nome = nome.encode("ascii", "ignore").decode("ascii").lower()
+    nome = re.sub(r"[^a-z0-9]+", "_", nome).strip("_")
+    return nome or "embarcacao"
+
+
+# ============================================================
+# GRAFICO
+# ============================================================
+
+def gerar_grafico(df, empresa, nome_embarcacao, destino):
+    df = df.sort_values("data_reportada").copy()
+    total_kg = float(df["emissao_intervalo_kg_co2e"].sum(skipna=True))
+    total_t = total_kg / 1000.0
+    total_m3 = float(df["consumo_estimado_m3_intervalo"].sum(skipna=True))
+    total_km = float(df["distancia_km"].sum(skipna=True))
+    intervalos_sem_classificacao = int(
+        df["regime_operacional_estimado"].isin(
+            ["SEM_CLASSIFICACAO", "SEM_INTERVALO_ANTERIOR"]
+        ).sum()
+    )
+
+    customdata = df[
+        [
+            "distancia_km",
+            "intervalo_horas",
+            "regime_operacional_estimado",
+            "consumo_estimado_m3_dia",
+            "consumo_estimado_m3_intervalo",
+            "emissao_intervalo_kg_co2e",
+            "emissao_acumulada_t_co2e",
+            "distancia_local_km",
+            "distancia_ativo_km",
+            "campo",
+        ]
+    ].to_numpy()
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=df["data_reportada"],
+            y=df["emissao_acumulada_kg_co2e"],
+            customdata=customdata,
+            mode="lines+markers",
+            name="Emissao acumulada",
+            line=dict(color=BRANCO, width=2),
+            marker=dict(color=BRANCO, size=5),
+            hovertemplate=(
+                "<b>Data reportada:</b> %{x|%d/%m/%Y %H:%M}"
+                "<br><b>Distancia entre posicoes:</b> %{customdata[0]:,.2f} km"
+                "<br><b>Intervalo:</b> %{customdata[1]:,.2f} horas"
+                "<br><b>Regime estimado:</b> %{customdata[2]}"
+                "<br><b>Taxa:</b> %{customdata[3]:,.2f} m³/dia"
+                "<br><b>Consumo estimado no intervalo:</b> %{customdata[4]:,.4f} m³"
+                "<br><b>Emissao do intervalo:</b> %{customdata[5]:,.2f} kg CO2e"
+                "<br><b>Distancia ao local fixo:</b> %{customdata[7]:,.2f} km"
+                "<br><b>Distancia ao ativo:</b> %{customdata[8]:,.2f} km"
+                "<br><b>Campo petrolífero:</b> %{customdata[9]}"
+                "<br><b>Emissao acumulada:</b> %{y:,.2f} kg CO2e"
+                "<br><b>Emissao acumulada:</b> %{customdata[6]:,.4f} t CO2e"
+                "<extra></extra>"
+            ),
+        )
+    )
+
+    fig.update_xaxes(
+        title=dict(text="Data reportada (data_reportada)", font=dict(color=BRANCO)),
+        tickformat="%d/%m/%Y",
+        tickangle=90,
+        tickfont=dict(color=BRANCO),
+        linecolor=BRANCO,
+        gridcolor="rgba(255,255,255,0.15)",
+        zerolinecolor="rgba(255,255,255,0.2)",
+        automargin=True,
+    )
+    fig.update_yaxes(
+        title=dict(text="Emissao acumulada (kg CO2e)", font=dict(color=BRANCO)),
+        tickfont=dict(color=BRANCO),
+        linecolor=BRANCO,
+        gridcolor="rgba(255,255,255,0.15)",
+        zerolinecolor="rgba(255,255,255,0.2)",
+        rangemode="tozero",
+        automargin=True,
+    )
+    fig.update_layout(
+        paper_bgcolor=FUNDO,
+        plot_bgcolor=FUNDO,
+        font=dict(color=BRANCO, family="Arial"),
+        title=dict(
+            text=(
+                f"Emissao estimada de CO2e — {nome_embarcacao}"
+                f"<br><sup>{empresa} | Distancia somada: {total_km:,.2f} km"
+                f" | Combustivel estimado: {total_m3:,.3f} m³"
+                f" | Emissao: {total_kg:,.2f} kg CO2e ({total_t:,.4f} t CO2e)"
+                f"<br>Intervalos sem classificacao/sem coleta anterior: {intervalos_sem_classificacao}"
+                f" | Fator: {KG_CO2E_POR_LITRO:g} kg CO2e/L</sup>"
+            ),
+            font=dict(color=BRANCO, size=20),
+            x=0.5,
+            xanchor="center",
+        ),
+        showlegend=False,
+        autosize=True,
+        margin=dict(l=85, r=25, t=135, b=80),
+        hovermode="x unified",
+        hoverlabel=dict(
+            bgcolor=FUNDO,
+            font=dict(color=BRANCO),
+            bordercolor=BRANCO,
+        ),
+    )
+
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    fig.write_html(
+        destino,
+        include_plotlyjs=True,
+        full_html=True,
+        config={
+            "responsive": True,
+            "displayModeBar": True,
+            "displaylogo": False,
+        },
+        default_width="100%",
+        default_height="100vh",
+    )
+
+    # Dados detalhados de cada intervalo para auditoria.
+    df.to_csv(
+        destino.with_suffix(".csv"),
+        index=False,
+        encoding="utf-8-sig",
+    )
+    return total_km, total_m3, total_kg, intervalos_sem_classificacao
+
+
+# ============================================================
+# EXECUCAO
+# ============================================================
+
+def main():
+    inicio = pd.Timestamp(DATA_INICIO).normalize()
+    fim = pd.Timestamp.now()
+    if fim <= inicio:
+        raise ValueError("DATA_INICIO nao pode ser posterior ao momento atual.")
+
+    engine = criar_engine()
+    total_graficos = 0
+    resumo = []
+
+    try:
+        with engine.connect() as conexao:
+            conexao.execute(text("SELECT 1"))
+
+        print("=" * 70)
+        print("CONEXAO COM POSTGRESQL REALIZADA COM SUCESSO")
+        print("Fonte da trajetória: tabelas RAW; contexto: tabela enriquecida")
+        print(f"Periodo por data_reportada: {inicio} ate {fim}")
+        print(f"Taxas: cruzeiro={CONSUMO_CRUZEIRO_M3_DIA:g}; "
+              f"ativo={CONSUMO_PROXIMO_ATIVO_M3_DIA:g}; "
+              f"dentro do campo={CONSUMO_PROXIMO_ATIVO_M3_DIA:g}; "
+              f"local fixo={CONSUMO_LOCAL_FIXO_M3_DIA:g} m3/dia")
+        print(f"Fator: {KG_CO2E_POR_LITRO:g} kg CO2e/litro")
+        print("=" * 70)
+
+        dados = carregar_posicoes(engine, inicio, fim)
+        if dados.empty:
+            print("Nenhuma posicao encontrada no periodo.")
+            return
+
+        for empresa in EMPRESAS:
+            dados_empresa = dados[
+                dados["empresa"].astype(str).str.upper() == empresa
+            ].copy()
+
+            print("\n" + "=" * 70)
+            print(f"EMPRESA: {empresa}")
+            print("=" * 70)
+
+            if dados_empresa.empty:
+                print("Nenhuma posicao encontrada para a empresa.")
+                continue
+
+            nomes_usados = set()
+            for id_embarcacao, bruto in dados_empresa.groupby(
+                "id_embarcacao", sort=True
+            ):
+                nome = str(bruto["nome_embarcacao"].iloc[0])
+                df, invalidos, repetidos = preparar_e_calcular_distancias(
+                    bruto
+                )
+                df = calcular_emissoes_embarcacao(df)
+
+                print(f"\nEmbarcacao: {nome}")
+                print(f"Registros consultados: {len(bruto)}")
+                print(f"Registros inválidos removidos: {invalidos}")
+                print(f"Horários reportados repetidos removidos: {repetidos}")
+                print(f"Intervalos calculados: {int(df['intervalo_dias'].gt(0).sum())}")
+                print("Classificacao dos intervalos:")
+                print(df["regime_operacional_estimado"].value_counts(dropna=False).to_string())
+
+                if df.empty:
+                    print("Ignorada: nenhuma posicao valida.")
+                    continue
+
+                slug = nome_arquivo(nome)
+                if slug in nomes_usados:
+                    slug = f"{slug}_{id_embarcacao}"
+                nomes_usados.add(slug)
+
+                destino = PASTA_SAIDA / empresa.lower() / f"{slug}.html"
+                total_km, total_m3, total_kg, sem_classificacao = gerar_grafico(
+                    df, empresa, nome, destino
+                )
+
+                print(f"Distancia somada: {total_km:,.2f} km")
+                print(f"Combustivel estimado: {total_m3:,.3f} m3")
+                print(f"Emissao estimada: {total_kg:,.2f} kg CO2e")
+                print(f"Intervalos sem classificacao/sem coleta anterior: {sem_classificacao}")
+                print(f"Grafico salvo: {destino}")
+                print(f"Dados CSV: {destino.with_suffix('.csv')}")
+
+                resumo.append({
+                    "empresa": empresa,
+                    "id_embarcacao": id_embarcacao,
+                    "nome_embarcacao": nome,
+                    "distancia_somada_km": total_km,
+                    "combustivel_estimado_m3": total_m3,
+                    "emissao_kg_co2e": total_kg,
+                    "emissao_t_co2e": total_kg / 1000.0,
+                    "intervalos_sem_classificacao_ou_sem_anterior": sem_classificacao,
+                    "taxa_cruzeiro_m3_dia": CONSUMO_CRUZEIRO_M3_DIA,
+                    "taxa_ativo_m3_dia": CONSUMO_PROXIMO_ATIVO_M3_DIA,
+                    "taxa_local_fixo_m3_dia": CONSUMO_LOCAL_FIXO_M3_DIA,
+                    "fator_kg_co2e_litro": KG_CO2E_POR_LITRO,
+                })
+                total_graficos += 1
+
+        if resumo:
+            PASTA_SAIDA.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame(resumo).to_csv(
+                PASTA_SAIDA / "resumo_emissoes_co2e.csv",
+                index=False,
+                encoding="utf-8-sig",
+            )
+            print(f"\nResumo geral salvo em: {PASTA_SAIDA / 'resumo_emissoes_co2e.csv'}")
+
+    finally:
+        engine.dispose()
+
+    print("\n" + "=" * 70)
+    print(f"GRAFICOS GERADOS: {total_graficos}")
+    print("=" * 70)
+
+
+if __name__ == "__main__":
+    main()

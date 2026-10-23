@@ -1,0 +1,6 @@
+﻿id_empresa,empresa,id_embarcacao,nome_embarcacao,id_posicao_origem,data_consulta,data_reportada,distancia_km,distancia_local_km,distancia_ativo_km,contexto_operacional,data_coleta_anterior,intervalo_horas,intervalo_dias,regime_operacional_estimado,consumo_estimado_m3_dia,consumo_estimado_m3_intervalo,combustivel_estimado_litros,emissao_intervalo_kg_co2e,emissao_acumulada_kg_co2e,emissao_acumulada_t_co2e
+1,CBO,19,CBO CAMPOS,156,2026-08-01 09:47:00,2021-07-13 13:34:00,0.0,2.043,2.18,PORTO,,,,SEM_INTERVALO_ANTERIOR,,,,,0.0,0.0
+1,CBO,19,CBO CAMPOS,157,2026-08-02 08:32:00,2021-07-13 13:34:00,0.0,2.043,2.18,PORTO,2026-08-01 09:47:00,22.75,0.9479166666666666,SEM_CLASSIFICACAO,,,,,0.0,0.0
+1,CBO,19,CBO CAMPOS,158,2026-08-03 07:54:00,2021-07-13 13:34:00,0.0,2.043,2.18,PORTO,2026-08-02 08:32:00,23.366666666666667,0.9736111111111111,SEM_CLASSIFICACAO,,,,,0.0,0.0
+1,CBO,19,CBO CAMPOS,159,2026-09-13 20:45:00,2021-07-13 13:34:00,0.0,2.043,2.18,PORTO,2026-08-03 07:54:00,996.85,41.53541666666667,SEM_CLASSIFICACAO,,,,,0.0,0.0
+1,CBO,19,CBO CAMPOS,160,2026-09-14 17:41:00,2021-07-13 13:34:00,0.0,2.043,2.18,PORTO,2026-09-13 20:45:00,20.933333333333334,0.8722222222222222,SEM_CLASSIFICACAO,,,,,0.0,0.0

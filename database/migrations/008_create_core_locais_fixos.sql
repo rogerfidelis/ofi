@@ -17,5 +17,5 @@ CREATE TABLE IF NOT EXISTS core.locais_fixos (
         UNIQUE (nome_local),
 
     CONSTRAINT locais_fixos_tipo_check
-        CHECK (tipo_local IN ('PORTO', 'ESTALEIRO'))
+        CHECK (tipo_local IN ('PORTO', 'ESTALEIRO', 'FUNDEIO'))
 );
