@@ -8,4 +8,4 @@ VALUES
     ('CBO'),
     ('BRAM'),
     ('STARNAV')
-ON CONFLICT (nome) DO NOTHING;
+ON CONFLICT (nome_empresa) DO NOTHING;

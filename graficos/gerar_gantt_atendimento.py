@@ -33,7 +33,7 @@ load_dotenv(BASE / ".env")
 EMPRESAS = ["BRAM", "CBO", "STARNAV"]
 
 DATA_INICIO = "2026-08-01"
-DATA_FIM = "2026-09-22"
+DATA_FIM = pd.Timestamp.now()
 
 PASTA_SAIDA = BASE / "graficos" / "gantt_atendimento"
 
@@ -259,6 +259,13 @@ def obter_referencia(linha):
 # CONSULTA AO BANCO
 # ============================================================
 
+"""
+Consulta as posições classificadas de uma empresa.
+
+A data final representa o momento da execução
+e é utilizada como limite exclusivo.
+"""
+
 def consultar_posicoes(
     engine,
     empresa,
@@ -273,7 +280,12 @@ def consultar_posicoes(
     """
 
     inicio = pd.Timestamp(data_inicio)
-    fim_exclusivo = pd.Timestamp(data_fim) + pd.Timedelta(days=1)
+    fim_exclusivo = pd.Timestamp(data_fim)
+
+    if fim_exclusivo < inicio:
+        raise ValueError(
+            "DATA_INICIO não pode ser posterior ao momento da execução."
+        )
 
     sql = text(
         """
@@ -703,22 +715,56 @@ def criar_gantt(
         marker_line_width=1,
     )
 
+    # Ajusta a densidade do eixo temporal à duração deste Gantt.
+    inicio_eixo = pd.to_datetime(df_gantt["Inicio"]).min()
+    fim_eixo = pd.to_datetime(df_gantt["Fim"]).max()
+    amplitude_dias = max(
+        (fim_eixo - inicio_eixo).total_seconds() / 86400,
+        1 / 24,
+    )
+
+    # Escolhe um intervalo que mantenha aproximadamente 12 marcas ou menos.
+    intervalos_dias = [
+        0.25,  # 6 horas
+        0.5,   # 12 horas
+        1,     # 1 dia
+        2,     # 2 dias
+        3,     # 3 dias
+        7,     # 1 semana
+        14,    # 2 semanas
+        30,    # aproximadamente 1 mês
+    ]
+    intervalo_dias = next(
+        (
+            intervalo
+            for intervalo in intervalos_dias
+            if intervalo >= amplitude_dias / 12
+        ),
+        30,
+    )
+
+    formato_eixo = (
+        "%d/%m %H:%M"
+        if intervalo_dias < 1
+        else "%d/%m"
+    )
+
     fig.update_xaxes(
         title_text="Data / Hora",
         title_font={
-            "size": 18,
+            "size": 16,
             "color": COR_TEXTO,
         },
         tickfont={
-            "size": 13,
+            "size": 12,
             "color": COR_TEXTO,
         },
-        tickformat="%d/%m %H:%M",
-        dtick=6 * 60 * 60 * 1000,
-        tickangle=90,
+        tickformat=formato_eixo,
+        dtick=intervalo_dias * 24 * 60 * 60 * 1000,
+        tickangle=0,
         automargin=True,
         color=COR_TEXTO,
-        gridcolor="rgba(255,255,255,0.15)",
+        gridcolor="rgba(255,255,255,0.12)",
         zerolinecolor="rgba(255,255,255,0.20)",
     )
 
@@ -733,7 +779,9 @@ def criar_gantt(
             "color": COR_TEXTO,
         },
         automargin=True,
-        autorange="reversed",
+        # Plotly Express timeline j? ordena as categorias de forma inversa
+        # para exibir a primeira atividade no topo. N?o inverter novamente.
+        autorange=True,
         color=COR_TEXTO,
         gridcolor="rgba(255,255,255,0.08)",
         zerolinecolor="rgba(255,255,255,0.15)",

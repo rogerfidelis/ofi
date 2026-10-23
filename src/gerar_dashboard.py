@@ -154,6 +154,9 @@ def main():
                 "ACUMULADA": (
                     f"graficos/distancia_acumulada/{empresa}/{arquivo}.html"
                 ),
+                "EMISSAO": (
+                    f"graficos/emissao_co2e/{empresa}/{arquivo}.html"
+                ),
                 "GANTT": (
                     f"graficos/gantt_atendimento/{empresa}/{arquivo}.html"
                 ),

@@ -38,7 +38,7 @@ EMPRESAS = [
 ]
 
 DATA_INICIO = pd.Timestamp("2026-08-01 00:00:00")
-DATA_FIM = pd.Timestamp("2026-09-22 23:59:59")
+DATA_FIM = pd.Timestamp.now()
 
 CENTRO_MAPA = [-22.872174, -41.983981]
 ZOOM_INICIAL = 9

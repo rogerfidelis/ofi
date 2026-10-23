@@ -17,11 +17,14 @@ CREATE TABLE IF NOT EXISTS core.ativos (
             tipo_ativo IN (
                 'navio sonda',
                 'FPSO',
-                'Semi-Sub/Prod/Perfuração',
-                'Semi-Sub/Perfuração',
+                'Semi-Sub/Prod/Perfuracao',
+                'Semi-Sub/Perfuracao',
                 'Fixa (Habitada)',
-                'Semi-Sub/Produção',
+                'Semi-Sub/Producao',
                 'Fixa (Rebombeio)'
             )
         )
+        
 );
+
+

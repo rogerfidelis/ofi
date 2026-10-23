@@ -27,7 +27,7 @@ BRANCO = "#FFFFFF"
 # ============================================================
 
 DATA_INICIO = "2026-08-01"
-DATA_FIM = "2026-09-22"
+DATA_FIM = pd.Timestamp.now()
 
 data_inicio = pd.to_datetime(DATA_INICIO)
 

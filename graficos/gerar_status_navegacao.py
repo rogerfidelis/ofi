@@ -52,17 +52,15 @@ engine = create_engine(
 # PERÍODO DA ANÁLISE
 # ============================================================
 
-DATA_INICIO = "2026-08-01"
-DATA_FIM = "2026-09-22"
+DATA_INICIO = pd.Timestamp("2026-08-01")
 
+# Captura a data e a hora local uma única vez por execução.
+DATA_FIM_EXCLUSIVA = pd.Timestamp.now()
 
-DATA_INICIO = pd.to_datetime(DATA_INICIO)
-
-# Soma 1 dia para incluir todo o DATA_FIM
-DATA_FIM_EXCLUSIVA = (
-    pd.to_datetime(DATA_FIM)
-    + pd.Timedelta(days=1)
-)
+if DATA_FIM_EXCLUSIVA < DATA_INICIO:
+    raise ValueError(
+        "DATA_INICIO não pode ser posterior ao momento da execução."
+    )
 
 
 # ============================================================

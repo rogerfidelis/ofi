@@ -25,8 +25,11 @@ CREATE TABLE IF NOT EXISTS analytics.posicoes_enriquecidas (
     distancia_ativo_km NUMERIC(12,3),
     evidencia_ativo NUMERIC(3,2),
 
-    -- Campo onde está localizado o ativo
+    -- Campo associado ao ativo offshore mais próximo
     id_campo BIGINT,
+
+    -- Campo petrolífero cujo polígono contém a posição da embarcação
+    campo VARCHAR(150),
 
     -- Proximidade de infraestrutura logística
     id_local_proximo INTEGER,
